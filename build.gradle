@@ -1,0 +1,18 @@
+import bb.TransformationTask
+
+plugins {
+    id 'java'
+}
+
+compileJava {
+    destinationDir = file("$buildDir/classes/java/raw")
+}
+
+task myTransformation(type: TransformationTask, dependsOn: compileJava) {
+    source = file("$buildDir/classes/java/raw")
+    target = file("$buildDir/classes/java/main")
+}
+
+jar {
+    dependsOn myTransformation
+}
