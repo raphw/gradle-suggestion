@@ -4,6 +4,14 @@ plugins {
     id 'java'
 }
 
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation 'org.apache.httpcomponents:httpclient:4.5.5'
+}
+
 compileJava {
     destinationDir = file("$buildDir/classes/java/raw")
 }
@@ -11,6 +19,7 @@ compileJava {
 task myTransformation(type: TransformationTask, dependsOn: compileJava) {
     source = file("$buildDir/classes/java/raw")
     target = file("$buildDir/classes/java/main")
+    classPath = configurations.runtimeClasspath
 }
 
 jar {

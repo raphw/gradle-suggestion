@@ -2,10 +2,10 @@ package foo;
 
 public class Baz {
 
-    private int b;
+    private int e;
 
     static class Inner {
 
-        private int x;
+        private int z;
     }
 }

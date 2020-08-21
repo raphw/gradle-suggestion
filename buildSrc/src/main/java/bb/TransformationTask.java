@@ -1,12 +1,13 @@
 package bb;
 
 import net.bytebuddy.build.Plugin;
+import net.bytebuddy.dynamic.ClassFileLocator;
 import org.gradle.api.DefaultTask;
 import org.gradle.api.GradleException;
+import org.gradle.api.file.ConfigurableFileCollection;
 import org.gradle.api.file.DirectoryProperty;
-import org.gradle.api.tasks.InputDirectory;
-import org.gradle.api.tasks.OutputDirectory;
-import org.gradle.api.tasks.TaskAction;
+import org.gradle.api.file.FileCollection;
+import org.gradle.api.tasks.*;
 import org.gradle.work.ChangeType;
 import org.gradle.work.Incremental;
 import org.gradle.work.InputChanges;
@@ -18,16 +19,34 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.*;
+import java.util.Optional;
 import java.util.stream.Collectors;
 
-public abstract class TransformationTask extends DefaultTask {
+public class TransformationTask extends DefaultTask {
+
+    private DirectoryProperty source = getProject().getObjects().directoryProperty(), target = getProject().getObjects().directoryProperty();
+
+    private Iterable<? extends File> classPath;
 
     @Incremental
     @InputDirectory
-    public abstract DirectoryProperty getSource();
+    public DirectoryProperty getSource() {
+        return source;
+    }
 
     @OutputDirectory
-    public abstract DirectoryProperty getTarget();
+    public DirectoryProperty getTarget() {
+        return target;
+    }
+
+    @InputFiles
+    public Iterable<? extends File> getClassPath() {
+        return classPath;
+    }
+
+    public void setClassPath(Iterable<? extends File> classPath) {
+        this.classPath = classPath;
+    }
 
     @TaskAction
     public void transform(InputChanges changes) throws IOException {
@@ -80,11 +99,21 @@ public abstract class TransformationTask extends DefaultTask {
             getProject().delete(getTarget().getAsFileTree());
             source = new Plugin.Engine.Source.ForFolder(getSource().getAsFile().get());
         }
-        Plugin.Engine.Summary summary = new Plugin.Engine.Default().apply(
-                source,
-                new Plugin.Engine.Target.ForFolder(getTarget().getAsFile().get()),
-                DummyPlugin::new
-        );
+        List<ClassFileLocator> classFileLocators = new ArrayList<ClassFileLocator>();
+        for (File artifact : getClassPath()) {
+            classFileLocators.add(artifact.isFile()
+                    ? ClassFileLocator.ForJarFile.of(artifact)
+                    : new ClassFileLocator.ForFolder(artifact));
+        }
+        ClassFileLocator classFileLocator = new ClassFileLocator.Compound(classFileLocators);
+        Plugin.Engine.Summary summary;
+        try {
+            summary = new Plugin.Engine.Default()
+                .with(classFileLocator)
+                .apply(source, new Plugin.Engine.Target.ForFolder(getTarget().getAsFile().get()), DummyPlugin::new);
+        } finally {
+            classFileLocator.close();
+        }
         getLogger().info("Transformed {} classes (incremental = {})", summary.getTransformed().size(), changes.isIncremental());
     }
 
