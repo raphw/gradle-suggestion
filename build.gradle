@@ -20,7 +20,9 @@ task myTransformation(type: ByteBuddyTask, dependsOn: compileJava) {
     source = compileJava.getDestinationDir()
     target = file("$buildDir/classes/java/main")
     classPath.from configurations.runtimeClasspath
-    parallel = true
+    transformation {
+        plugin = "com.example.junit.HookInstallingPlugin"
+    }
 }
 
 jar {

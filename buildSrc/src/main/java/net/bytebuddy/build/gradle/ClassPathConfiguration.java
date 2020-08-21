@@ -15,30 +15,27 @@
  */
 package net.bytebuddy.build.gradle;
 
+import org.gradle.api.tasks.CompileClasspath;
+import org.gradle.api.tasks.InputFiles;
+
 import java.io.File;
+import java.util.Collections;
 import java.util.Iterator;
 
 /**
  * An abstract base class for a user configuration implying a class path.
  */
-public class AbstractUserConfiguration {
+public class ClassPathConfiguration {
 
     /**
      * The class to use for this configuration path or {@code null} if no class path is specified.
      */
-    private Iterable<File> classPath;
+    private Iterable<File> classPath = Collections.emptySet();
 
-    /**
-     * Returns the class path or builds a class path from the supplied arguments if no class path was set.
-     *
-     * @param root      The root directory of the project being built.
-     * @param classPath The class path dependencies.
-     * @return An iterable of all elements of the class path to be used.
-     */
-    public Iterable<? extends File> getClassPath(File root, Iterable<? extends File> classPath) {
-        return this.classPath == null
-                ? new PrefixIterable(root, classPath)
-                : this.classPath;
+    @InputFiles
+    @CompileClasspath
+    public Iterable<File> getClassPath() {
+        return classPath;
     }
 
     /**
@@ -48,6 +45,19 @@ public class AbstractUserConfiguration {
      */
     public void setClassPath(Iterable<File> classPath) {
         this.classPath = classPath;
+    }
+
+    /**
+     * Returns the class path or builds a class path from the supplied arguments if no class path was set.
+     *
+     * @param root      The root directory of the project being built.
+     * @param classPath The class path dependencies.
+     * @return An iterable of all elements of the class path to be used.
+     */
+    Iterable<File> iterate(File root, Iterable<? extends File> classPath) {
+        return this.classPath == null
+                ? new PrefixIterable(root, classPath)
+                : this.classPath;
     }
 
     /**

@@ -16,14 +16,15 @@
 package net.bytebuddy.build.gradle;
 
 import net.bytebuddy.build.EntryPoint;
-import org.gradle.api.GradleException;
+import org.gradle.api.Project;
+import org.gradle.api.tasks.Input;
 
 import java.io.File;
 
 /**
  * Defines an entry point for a Byte Buddy transformation in a Gradle build.
  */
-public class Initialization extends AbstractUserConfiguration {
+public class Initialization extends ClassPathConfiguration {
 
     /**
      * The fully-qualified name of the entry point or any constant name of {@link EntryPoint.Default}.
@@ -35,10 +36,15 @@ public class Initialization extends AbstractUserConfiguration {
      *
      * @return A default initialization instance.
      */
-    public static Initialization makeDefault() {
+    static Initialization makeDefault() {
         Initialization initialization = new Initialization();
         initialization.setEntryPoint(EntryPoint.Default.REBASE.name());
         return initialization;
+    }
+
+    @Input
+    public String getEntryPoint() {
+        return entryPoint;
     }
 
     /**
@@ -58,9 +64,9 @@ public class Initialization extends AbstractUserConfiguration {
      * @param classPath           The class path of the current task.
      * @return A resolved entry point.
      */
-    public EntryPoint getEntryPoint(ClassLoaderResolver classLoaderResolver, File root, Iterable<? extends File> classPath) {
+    EntryPoint entryPoint(ClassLoaderResolver classLoaderResolver, File root, Iterable<? extends File> classPath) {
         if (entryPoint == null || entryPoint.length() == 0) {
-            throw new GradleException("Entry point name is not defined");
+            throw new IllegalStateException("Entry point name is not defined");
         }
         for (EntryPoint.Default entryPoint : EntryPoint.Default.values()) {
             if (this.entryPoint.equals(entryPoint.name())) {
@@ -68,11 +74,11 @@ public class Initialization extends AbstractUserConfiguration {
             }
         }
         try {
-            return (EntryPoint) Class.forName(entryPoint, false, classLoaderResolver.resolve(getClassPath(root, classPath)))
+            return (EntryPoint) Class.forName(entryPoint, false, classLoaderResolver.resolve(iterate(root, classPath)))
                     .getDeclaredConstructor()
                     .newInstance();
         } catch (Exception exception) {
-            throw new GradleException("Cannot create entry point: " + entryPoint, exception);
+            throw new IllegalStateException("Cannot create entry point: " + entryPoint, exception);
         }
     }
 }

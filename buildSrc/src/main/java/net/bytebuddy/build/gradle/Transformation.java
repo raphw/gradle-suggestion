@@ -17,17 +17,16 @@ package net.bytebuddy.build.gradle;
 
 import groovy.lang.Closure;
 import net.bytebuddy.build.Plugin;
-import org.gradle.api.GradleException;
 import org.gradle.api.Project;
+import org.gradle.api.tasks.Input;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 
 /**
  * A transformation specification to apply during the Gradle plugin's execution.
  */
-public class Transformation extends AbstractUserConfiguration {
+public class Transformation extends ClassPathConfiguration {
 
     /**
      * The current project.
@@ -54,6 +53,11 @@ public class Transformation extends AbstractUserConfiguration {
         arguments = new ArrayList<PluginArgument>();
     }
 
+    @Input
+    public List<PluginArgument> getArguments() {
+        return arguments;
+    }
+
     /**
      * Adds a plugin argument to consider during instantiation.
      *
@@ -68,9 +72,9 @@ public class Transformation extends AbstractUserConfiguration {
      *
      * @return The plugin type name.
      */
-    public String getPlugin() {
-        if (plugin == null || plugin.length() == 0) {
-            throw new GradleException("Plugin name was not specified or is empty");
+    String plugin() {
+        if (plugin.length() == 0) {
+            throw new IllegalStateException("Plugin name was not specified or is empty");
         }
         return plugin;
     }
@@ -80,7 +84,8 @@ public class Transformation extends AbstractUserConfiguration {
      *
      * @return The configured plugin name.
      */
-    public String getRawPlugin() {
+    @Input
+    public String getPlugin() {
         return plugin;
     }
 
@@ -98,15 +103,11 @@ public class Transformation extends AbstractUserConfiguration {
      *
      * @return A list of argument resolvers.
      */
-    public List<Plugin.Factory.UsingReflection.ArgumentResolver> makeArgumentResolvers() {
-        if (arguments == null) {
-            return Collections.emptyList();
-        } else {
-            List<Plugin.Factory.UsingReflection.ArgumentResolver> argumentResolvers = new ArrayList<Plugin.Factory.UsingReflection.ArgumentResolver>();
-            for (PluginArgument argument : arguments) {
-                argumentResolvers.add(argument.toArgumentResolver());
-            }
-            return argumentResolvers;
+    List<Plugin.Factory.UsingReflection.ArgumentResolver> makeArgumentResolvers() {
+        List<Plugin.Factory.UsingReflection.ArgumentResolver> argumentResolvers = new ArrayList<Plugin.Factory.UsingReflection.ArgumentResolver>();
+        for (PluginArgument argument : arguments) {
+            argumentResolvers.add(argument.toArgumentResolver());
         }
+        return argumentResolvers;
     }
 }

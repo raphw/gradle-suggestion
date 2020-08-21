@@ -1,5 +1,6 @@
 package net.bytebuddy.build.gradle;
 
+import groovy.lang.Closure;
 import net.bytebuddy.ClassFileVersion;
 import net.bytebuddy.build.BuildLogger;
 import net.bytebuddy.build.EntryPoint;
@@ -7,47 +8,26 @@ import net.bytebuddy.build.Plugin;
 import net.bytebuddy.description.type.TypeDescription;
 import net.bytebuddy.dynamic.ClassFileLocator;
 import net.bytebuddy.dynamic.scaffold.inline.MethodNameTransformer;
-import org.gradle.api.Action;
 import org.gradle.api.DefaultTask;
-import org.gradle.api.GradleException;
 import org.gradle.api.file.ConfigurableFileCollection;
 import org.gradle.api.file.DirectoryProperty;
 import org.gradle.api.logging.Logger;
 import org.gradle.api.plugins.JavaPluginConvention;
-import org.gradle.api.provider.Property;
 import org.gradle.api.tasks.*;
 import org.gradle.work.ChangeType;
 import org.gradle.work.FileChange;
 import org.gradle.work.Incremental;
 import org.gradle.work.InputChanges;
-import org.gradle.workers.WorkAction;
-import org.gradle.workers.WorkParameters;
-import org.gradle.workers.WorkQueue;
-import org.gradle.workers.WorkerExecutor;
 
-import javax.inject.Inject;
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.Callable;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.Executor;
-import java.util.concurrent.atomic.AtomicLong;
 
-public class ByteBuddyTask extends DefaultTask {
+public abstract class ByteBuddyTask extends DefaultTask {
 
-    private final WorkerExecutor workerExecutor;
-
-    private final DirectoryProperty source = getProject().getObjects().directoryProperty();
-
-    private final DirectoryProperty target = getProject().getObjects().directoryProperty();
-
-    private final ConfigurableFileCollection classPath = getProject().getObjects().fileCollection();
-
-    private List<Transformation> transformations = new ArrayList<>();
+    private final List<Transformation> transformations = new ArrayList<>();
 
     private Initialization initialization = Initialization.makeDefault();
 
@@ -61,38 +41,28 @@ public class ByteBuddyTask extends DefaultTask {
 
     private boolean extendedParsing;
 
-    private boolean parallel;
+    private int threads;
 
     private boolean incremental = true;
 
-    @Inject
-    public ByteBuddyTask(WorkerExecutor workerExecutor) {
-        this.workerExecutor = workerExecutor;
-    }
-
     @Incremental
     @InputDirectory
-    public DirectoryProperty getSource() {
-        return source;
-    }
+    public abstract DirectoryProperty getSource();
 
     @OutputDirectory
-    public DirectoryProperty getTarget() {
-        return target;
-    }
+    public abstract DirectoryProperty getTarget();
 
+    @InputFiles
     @CompileClasspath
-    public Iterable<File> getClassPath() {
-        return classPath;
-    }
+    public abstract ConfigurableFileCollection getClassPath();
 
     @Nested
     public List<Transformation> getTransformations() {
         return transformations;
     }
 
-    public void setTransformations(List<Transformation> transformations) {
-        this.transformations = transformations;
+    public void transformation(Closure<?> closure) {
+        transformations.add((Transformation) getProject().configure(new Transformation(getProject()), closure));
     }
 
     @Nested
@@ -100,8 +70,11 @@ public class ByteBuddyTask extends DefaultTask {
         return initialization;
     }
 
-    public void setInitialization(Initialization initialization) {
-        this.initialization = initialization;
+    public void initialization(Closure<?> closure) {
+        if (initialization != null) {
+            throw new IllegalStateException("Initialization is already set");
+        }
+        initialization = (Initialization) getProject().configure(new Initialization(), closure);
     }
 
     @Input
@@ -150,12 +123,12 @@ public class ByteBuddyTask extends DefaultTask {
     }
 
     @Internal
-    public boolean isParallel() {
-        return parallel;
+    public int getThreads() {
+        return threads;
     }
 
-    public void setParallel(boolean parallel) {
-        this.parallel = parallel;
+    public void setThreads(int threads) {
+        this.threads = threads;
     }
 
     @Internal
@@ -172,7 +145,7 @@ public class ByteBuddyTask extends DefaultTask {
     public void apply(InputChanges inputChanges) throws IOException {
         File sourceRoot = getSource().get().getAsFile(), targetRoot = getTarget().get().getAsFile();
         if (sourceRoot.equals(targetRoot)) {
-            throw new GradleException("Source and target folder cannot be equal: " + sourceRoot);
+            throw new IllegalStateException("Source and target folder cannot be equal: " + sourceRoot);
         }
         Plugin.Engine.Source source;
         if (isIncremental() && inputChanges.isIncremental()) {
@@ -201,21 +174,21 @@ public class ByteBuddyTask extends DefaultTask {
         try {
             List<Plugin.Factory> factories = new ArrayList<Plugin.Factory>(getTransformations().size());
             for (Transformation transformation : getTransformations()) {
-                String plugin = transformation.getPlugin();
+                String plugin = transformation.plugin();
                 try {
                     factories.add(new Plugin.Factory.UsingReflection((Class<? extends Plugin>) Class.forName(plugin,
                             false,
-                            classLoaderResolver.resolve(transformation.getClassPath(sourceRoot, classPath))))
+                            classLoaderResolver.resolve(transformation.iterate(sourceRoot, getClassPath()))))
                             .with(transformation.makeArgumentResolvers())
                             .with(Plugin.Factory.UsingReflection.ArgumentResolver.ForType.of(File.class, sourceRoot),
                                     Plugin.Factory.UsingReflection.ArgumentResolver.ForType.of(Logger.class, getLogger()),
                                     Plugin.Factory.UsingReflection.ArgumentResolver.ForType.of(BuildLogger.class, new GradleBuildLogger(getLogger()))));
-                    getLogger().info("Resolved plugin: {}", transformation.getRawPlugin());
+                    getLogger().info("Resolved plugin: {}", transformation.getPlugin());
                 } catch (Throwable throwable) {
-                    throw new GradleException("Cannot resolve plugin: " + transformation.getRawPlugin(), throwable);
+                    throw new IllegalStateException("Cannot resolve plugin: " + transformation.getPlugin(), throwable);
                 }
             }
-            EntryPoint entryPoint = getInitialization().getEntryPoint(classLoaderResolver, sourceRoot, getClassPath());
+            EntryPoint entryPoint = getInitialization().entryPoint(classLoaderResolver, sourceRoot, getClassPath());
             getLogger().info("Resolved entry point: {}", entryPoint);
             List<ClassFileLocator> classFileLocators = new ArrayList<ClassFileLocator>();
             for (File artifact : getClassPath()) {
@@ -230,7 +203,7 @@ public class ByteBuddyTask extends DefaultTask {
                 Plugin.Engine pluginEngine;
                 try {
                     ClassFileVersion classFileVersion;
-                    JavaPluginConvention convention = (JavaPluginConvention) getConvention().getPlugins().get("java");
+                    JavaPluginConvention convention = (JavaPluginConvention) getProject().getConvention().getPlugins().get("java");
                     if (convention == null) {
                         classFileVersion = ClassFileVersion.ofThisVm();
                         getLogger().warn("Could not locate Java target version, build is JDK dependant: {}", classFileVersion.getJavaVersion());
@@ -238,11 +211,11 @@ public class ByteBuddyTask extends DefaultTask {
                         classFileVersion = ClassFileVersion.ofJavaVersion(Integer.parseInt(convention.getTargetCompatibility().getMajorVersion()));
                         getLogger().debug("Java version detected: {}", classFileVersion.getJavaVersion());
                     }
-                    pluginEngine = Plugin.Engine.Default.of(entryPoint, classFileVersion, getSuffix() == null || getSuffix().length() == 0
+                    pluginEngine = Plugin.Engine.Default.of(entryPoint, classFileVersion, getSuffix().length() == 0
                             ? MethodNameTransformer.Suffixing.withRandomSuffix()
                             : new MethodNameTransformer.Suffixing(suffix));
                 } catch (Throwable throwable) {
-                    throw new GradleException("Cannot create plugin engine", throwable);
+                    throw new IllegalStateException("Cannot create plugin engine", throwable);
                 }
                 try {
                     summary = pluginEngine
@@ -256,18 +229,18 @@ public class ByteBuddyTask extends DefaultTask {
                                     : Plugin.Engine.Listener.NoOp.INSTANCE, isFailFast()
                                     ? Plugin.Engine.ErrorHandler.Failing.FAIL_FAST
                                     : Plugin.Engine.Listener.NoOp.INSTANCE)
-                            .with(isParallel()
-                                    ? new Plugin.Engine.Dispatcher.ForParallelTransformation.Factory(new GradleWorkExecutor(workerExecutor.noIsolation()))
-                                    :Plugin.Engine.Dispatcher.ForSerialTransformation.Factory.INSTANCE)
+                            .with(getThreads() == 0
+                                    ? Plugin.Engine.Dispatcher.ForSerialTransformation.Factory.INSTANCE
+                                    : new Plugin.Engine.Dispatcher.ForParallelTransformation.WithThrowawayExecutorService.Factory(getThreads()))
                             .apply(source, new Plugin.Engine.Target.ForFolder(targetRoot), factories);
                 } catch (Throwable throwable) {
-                    throw new GradleException("Failed to transform class files in " + sourceRoot, throwable);
+                    throw new IllegalStateException("Failed to transform class files in " + sourceRoot, throwable);
                 }
             } finally {
                 classFileLocator.close();
             }
             if (!summary.getFailed().isEmpty()) {
-                throw new GradleException(summary.getFailed() + " type transformations have failed");
+                throw new IllegalStateException(summary.getFailed() + " type transformations have failed");
             } else if (isWarnOnEmptyTypeSet() && summary.getTransformed().isEmpty()) {
                 getLogger().warn("No types were transformed during plugin execution");
             } else {
@@ -426,57 +399,6 @@ public class ByteBuddyTask extends DefaultTask {
         @Override
         public void onLiveInitializer(TypeDescription typeDescription, TypeDescription definingType) {
             logger.debug("Discovered live initializer for {} as a result of transforming {}", definingType, typeDescription);
-        }
-    }
-
-    protected interface GradleWorkExecutorParameters extends WorkParameters {
-
-        Property<Long> getJob();
-    }
-
-    protected static class GradleWorkExecutorAction implements Action<GradleWorkExecutorParameters> {
-
-        private final long id;
-
-        protected GradleWorkExecutorAction(long id) {
-            this.id = id;
-        }
-
-        @Override
-        public void execute(GradleWorkExecutorParameters parameters) {
-            System.out.println("Preparing " + id);
-            parameters.getJob().set(id);
-            System.out.println("Prepared " + id);
-        }
-    }
-
-    protected static abstract class GradleWorkExecutorWorkAction implements WorkAction<GradleWorkExecutorParameters> {
-
-        @Override
-        public void execute() {
-            System.out.println("Executing " + getParameters().getJob().get());
-            //GradleWorkExecutor.JOBS.remove(getParameters().getJob().get()).run();
-        }
-    }
-
-    protected static class GradleWorkExecutor implements Executor {
-
-        private static final AtomicLong COUNT = new AtomicLong();
-
-        private static final ConcurrentMap<Long, Runnable> JOBS = new ConcurrentHashMap<>();
-
-        private final WorkQueue workQueue;
-
-        protected GradleWorkExecutor(WorkQueue workQueue) {
-            this.workQueue = workQueue;
-        }
-
-        @Override
-        public void execute(Runnable job) {
-            long id = COUNT.getAndIncrement();
-            //JOBS.put(id, job);
-            workQueue.submit(GradleWorkExecutorWorkAction.class, new GradleWorkExecutorAction(id));
-            System.out.println("Submitted " + id);
         }
     }
 }
