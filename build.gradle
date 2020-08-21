@@ -1,8 +1,4 @@
 import net.bytebuddy.build.gradle.ByteBuddyTask
-import net.bytebuddy.description.modifier.Visibility
-import net.bytebuddy.description.type.TypeDescription
-import net.bytebuddy.dynamic.ClassFileLocator
-import net.bytebuddy.dynamic.DynamicType
 
 plugins {
     id 'java'
@@ -21,9 +17,9 @@ compileJava {
 }
 
 task myTransformation(type: ByteBuddyTask, dependsOn: compileJava) {
-    source = file("$buildDir/classes/java/raw")
+    source = compileJava.getDestinationDir()
     target = file("$buildDir/classes/java/main")
-    classPath = configurations.runtimeClasspath
+    classPath.from configurations.runtimeClasspath
 }
 
 jar {
