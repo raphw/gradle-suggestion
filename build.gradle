@@ -1,31 +1,7 @@
-import net.bytebuddy.build.gradle.ByteBuddyTask
-import net.bytebuddy.build.gradle.SamplePlugin
+import net.bytebuddy.build.gradle.ByteBuddyPlugin
 
 plugins {
     id 'java'
 }
 
-repositories {
-    mavenCentral()
-}
-
-dependencies {
-    implementation 'org.apache.httpcomponents:httpclient:4.5.5'
-}
-
-compileJava {
-    destinationDir = file("$buildDir/classes/java/raw")
-}
-
-task myTransformation(type: ByteBuddyTask, dependsOn: compileJava) {
-    source = compileJava.getDestinationDir()
-    target = file("$buildDir/classes/java/main")
-    classPath.from configurations.runtimeClasspath
-    transformation {
-        plugin = SamplePlugin.class
-    }
-}
-
-jar {
-    dependsOn myTransformation
-}
+apply plugin: ByteBuddyPlugin.class
