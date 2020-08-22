@@ -1,4 +1,5 @@
 import net.bytebuddy.build.gradle.ByteBuddyTask
+import net.bytebuddy.build.gradle.SamplePlugin
 
 plugins {
     id 'java'
@@ -21,7 +22,7 @@ task myTransformation(type: ByteBuddyTask, dependsOn: compileJava) {
     target = file("$buildDir/classes/java/main")
     classPath.from configurations.runtimeClasspath
     transformation {
-        plugin = "com.example.junit.HookInstallingPlugin"
+        plugin = SamplePlugin.class
     }
 }
 

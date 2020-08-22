@@ -26,7 +26,7 @@ import java.util.List;
 /**
  * A transformation specification to apply during the Gradle plugin's execution.
  */
-public class Transformation extends ClassPathConfiguration {
+public class Transformation {
 
     /**
      * The current project.
@@ -41,7 +41,7 @@ public class Transformation extends ClassPathConfiguration {
     /**
      * The fully-qualified name of the plugin type.
      */
-    private String plugin;
+    private Class<? extends Plugin> plugin;
 
     /**
      * Creates a new transformation.
@@ -68,46 +68,24 @@ public class Transformation extends ClassPathConfiguration {
     }
 
     /**
-     * Returns the plugin type name.
-     *
-     * @return The plugin type name.
-     */
-    String plugin() {
-        if (plugin.length() == 0) {
-            throw new IllegalStateException("Plugin name was not specified or is empty");
-        }
-        return plugin;
-    }
-
-    /**
-     * Returns the plugin name or {@code null} if it is not set.
-     *
-     * @return The configured plugin name.
-     */
-    @Input
-    public String getPlugin() {
-        return plugin;
-    }
-
-    /**
-     * Sets the plugin's name.
-     *
-     * @param plugin The fully-qualified name of the plugin type.
-     */
-    public void setPlugin(String plugin) {
-        this.plugin = plugin;
-    }
-
-    /**
      * Creates the argument resolvers for the plugin's constructor by transforming the plugin arguments.
      *
      * @return A list of argument resolvers.
      */
-    List<Plugin.Factory.UsingReflection.ArgumentResolver> makeArgumentResolvers() {
+    protected List<Plugin.Factory.UsingReflection.ArgumentResolver> makeArgumentResolvers() {
         List<Plugin.Factory.UsingReflection.ArgumentResolver> argumentResolvers = new ArrayList<Plugin.Factory.UsingReflection.ArgumentResolver>();
         for (PluginArgument argument : arguments) {
             argumentResolvers.add(argument.toArgumentResolver());
         }
         return argumentResolvers;
+    }
+
+    @Input
+    public Class<? extends Plugin> getPlugin() {
+        return plugin;
+    }
+
+    public void setPlugin(Class<? extends Plugin> plugin) {
+        this.plugin = plugin;
     }
 }

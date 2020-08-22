@@ -14,14 +14,13 @@ import org.gradle.api.file.DirectoryProperty;
 import org.gradle.api.logging.Logger;
 import org.gradle.api.plugins.JavaPluginConvention;
 import org.gradle.api.tasks.*;
-import org.gradle.work.ChangeType;
-import org.gradle.work.FileChange;
 import org.gradle.work.Incremental;
 import org.gradle.work.InputChanges;
 
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 
@@ -29,7 +28,7 @@ public abstract class ByteBuddyTask extends DefaultTask {
 
     private final List<Transformation> transformations = new ArrayList<>();
 
-    private Initialization initialization = Initialization.makeDefault();
+    private EntryPoint entryPoint = EntryPoint.Default.REBASE;
 
     private String suffix = "";
 
@@ -43,7 +42,7 @@ public abstract class ByteBuddyTask extends DefaultTask {
 
     private int threads;
 
-    private boolean incremental = true;
+    private IncrementalResolver incrementalResolver = IncrementalResolver.ForChangedFiles.INSTANCE;
 
     @Incremental
     @InputDirectory
@@ -65,16 +64,13 @@ public abstract class ByteBuddyTask extends DefaultTask {
         transformations.add((Transformation) getProject().configure(new Transformation(getProject()), closure));
     }
 
-    @Nested
-    public Initialization getInitialization() {
-        return initialization;
+    @Input
+    public EntryPoint getEntryPoint() {
+        return entryPoint;
     }
 
-    public void initialization(Closure<?> closure) {
-        if (initialization != null) {
-            throw new IllegalStateException("Initialization is already set");
-        }
-        initialization = (Initialization) getProject().configure(new Initialization(), closure);
+    public void setEntryPoint(EntryPoint entryPoint) {
+        this.entryPoint = entryPoint;
     }
 
     @Input
@@ -132,37 +128,27 @@ public abstract class ByteBuddyTask extends DefaultTask {
     }
 
     @Internal
-    public boolean isIncremental() {
-        return incremental;
+    public IncrementalResolver getIncrementalResolver() {
+        return incrementalResolver;
     }
 
-    public void setIncremental(boolean incremental) {
-        this.incremental = incremental;
+    public void setIncrementalResolver(IncrementalResolver incrementalResolver) {
+        this.incrementalResolver = incrementalResolver;
     }
 
     @TaskAction
-    @SuppressWarnings("unchecked")
     public void apply(InputChanges inputChanges) throws IOException {
         File sourceRoot = getSource().get().getAsFile(), targetRoot = getTarget().get().getAsFile();
         if (sourceRoot.equals(targetRoot)) {
             throw new IllegalStateException("Source and target folder cannot be equal: " + sourceRoot);
         }
         Plugin.Engine.Source source;
-        if (isIncremental() && inputChanges.isIncremental()) {
+        if (inputChanges.isIncremental() && incrementalResolver != null) {
             getLogger().debug("Applying incremental build");
-            List<File> files = new ArrayList<>();
-            for (FileChange change : inputChanges.getFileChanges(getSource())) {
-                files.add(change.getFile());
-                if (change.getFile().isDirectory()) {
-                    return;
-                } else if (change.getChangeType() == ChangeType.REMOVED) {
-                    File target = new File(targetRoot, sourceRoot.toURI().relativize(change.getFile().toURI()).getPath());
-                    if (getProject().delete(target)) {
-                        getLogger().debug("Deleted removed file {} to prepare incremental build", target);
-                    }
-                }
-            }
-            source = new ExplicitFileSource(getSource().getAsFile().get(), files);
+            source = new IncrementalSource(getSource().getAsFile().get(), incrementalResolver.apply(getProject(),
+                    inputChanges.getFileChanges(getSource()),
+                    sourceRoot,
+                    targetRoot));
         } else {
             getLogger().debug("Applying non-incremental build");
             if (getProject().delete(getTarget().getAsFileTree())) {
@@ -174,22 +160,17 @@ public abstract class ByteBuddyTask extends DefaultTask {
         try {
             List<Plugin.Factory> factories = new ArrayList<Plugin.Factory>(getTransformations().size());
             for (Transformation transformation : getTransformations()) {
-                String plugin = transformation.plugin();
                 try {
-                    factories.add(new Plugin.Factory.UsingReflection((Class<? extends Plugin>) Class.forName(plugin,
-                            false,
-                            classLoaderResolver.resolve(transformation.iterate(sourceRoot, getClassPath()))))
+                    factories.add(new Plugin.Factory.UsingReflection(transformation.getPlugin())
                             .with(transformation.makeArgumentResolvers())
                             .with(Plugin.Factory.UsingReflection.ArgumentResolver.ForType.of(File.class, sourceRoot),
                                     Plugin.Factory.UsingReflection.ArgumentResolver.ForType.of(Logger.class, getLogger()),
                                     Plugin.Factory.UsingReflection.ArgumentResolver.ForType.of(BuildLogger.class, new GradleBuildLogger(getLogger()))));
-                    getLogger().info("Resolved plugin: {}", transformation.getPlugin());
+                    getLogger().info("Resolved plugin: {}", transformation.getPlugin().getName());
                 } catch (Throwable throwable) {
-                    throw new IllegalStateException("Cannot resolve plugin: " + transformation.getPlugin(), throwable);
+                    throw new IllegalStateException("Cannot resolve plugin: " + transformation.getPlugin().getName(), throwable);
                 }
             }
-            EntryPoint entryPoint = getInitialization().entryPoint(classLoaderResolver, sourceRoot, getClassPath());
-            getLogger().info("Resolved entry point: {}", entryPoint);
             List<ClassFileLocator> classFileLocators = new ArrayList<ClassFileLocator>();
             for (File artifact : getClassPath()) {
                 classFileLocators.add(artifact.isFile()
@@ -211,9 +192,9 @@ public abstract class ByteBuddyTask extends DefaultTask {
                         classFileVersion = ClassFileVersion.ofJavaVersion(Integer.parseInt(convention.getTargetCompatibility().getMajorVersion()));
                         getLogger().debug("Java version detected: {}", classFileVersion.getJavaVersion());
                     }
-                    pluginEngine = Plugin.Engine.Default.of(entryPoint, classFileVersion, getSuffix().length() == 0
+                    pluginEngine = Plugin.Engine.Default.of(getEntryPoint(), classFileVersion, getSuffix().length() == 0
                             ? MethodNameTransformer.Suffixing.withRandomSuffix()
-                            : new MethodNameTransformer.Suffixing(suffix));
+                            : new MethodNameTransformer.Suffixing(getSuffix()));
                 } catch (Throwable throwable) {
                     throw new IllegalStateException("Cannot create plugin engine", throwable);
                 }
@@ -249,8 +230,6 @@ public abstract class ByteBuddyTask extends DefaultTask {
         } finally {
             classLoaderResolver.close();
         }
-        // TODO: result type? (NO-SOURCE etc)
-        // TODO: Worker API
     }
 
     /**
@@ -399,6 +378,51 @@ public abstract class ByteBuddyTask extends DefaultTask {
         @Override
         public void onLiveInitializer(TypeDescription typeDescription, TypeDescription definingType) {
             logger.debug("Discovered live initializer for {} as a result of transforming {}", definingType, typeDescription);
+        }
+    }
+
+    protected static class IncrementalSource extends Plugin.Engine.Source.ForFolder {
+
+        private final File root;
+
+        private final List<File> files;
+
+        protected IncrementalSource(File root, List<File> files) {
+            super(root);
+            this.root = root;
+            this.files = files;
+        }
+
+        @Override
+        public Iterator<Element> iterator() {
+            return new DelegationIterator(root, files.iterator());
+        }
+
+        private static class DelegationIterator implements Iterator<Element> {
+
+            private final File root;
+
+            private final Iterator<File> delegate;
+
+            public DelegationIterator(File root, Iterator<File> delegate) {
+                this.root = root;
+                this.delegate = delegate;
+            }
+
+            @Override
+            public boolean hasNext() {
+                return delegate.hasNext();
+            }
+
+            @Override
+            public Element next() {
+                return new Element.ForFile(root, delegate.next());
+            }
+
+            @Override
+            public void remove() {
+                throw new UnsupportedOperationException("remove");
+            }
         }
     }
 }
